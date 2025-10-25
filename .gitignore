@@ -1,0 +1,27 @@
+# Python cache / venv
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+.venv/
+venv/
+ENV/
+.env.*
+
+# Streamlit secrets (local only)
+.streamlit/
+secrets.toml
+
+# OS / editor junk
+.DS_Store
+.idea/
+.vscode/
+
+# Local data / DB
+/data/seed.db
+*.db
+
+# Uploads / large files
+*.pdf
+!.*/sample_docs/*.pdf
