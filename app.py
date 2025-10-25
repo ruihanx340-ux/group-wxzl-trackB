@@ -19,14 +19,29 @@ import io
 import uuid
 from datetime import datetime, date
 from typing import List, Dict, Any
-
+from openai import OpenAI
 import streamlit as st
+from dotenv import load_dotenv
+load_dotenv()
 
 try:
     from pypdf import PdfReader  # lightweight page count
 except Exception:
     PdfReader = None
+def get_api_key():
+    # 线上部署时：从 Streamlit Cloud 的 secrets 里拿
+    try:
+        import streamlit as st
+        if "OPENAI_API_KEY" in st.secrets:
+            return st.secrets["OPENAI_API_KEY"]
+    except Exception:
+        pass
 
+    # 本地开发时：优先从环境变量 / .env 读取
+    # 你可以用 python-dotenv，也可以手动 set 环境变量
+    return os.getenv("OPENAI_API_KEY")
+
+client = OpenAI(api_key=get_api_key())
 # --------------------------
 # Page config
 # --------------------------
@@ -93,27 +108,46 @@ def init_state():
 
 def _chatbot_reply(user_text: str) -> str:
     """
-    Placeholder logic for Step 1.
-    Will become Retrieval-Augmented + tool-calling in later steps.
+    Real model call using gpt-4o-mini (a cheaper/faster GPT family model).
+    We'll later enhance this to inject retrieved contract text.
     """
-    if not st.session_state.documents:
-        kb_tip = "No documents uploaded yet. Add leases in Knowledge Base so I can answer contract questions."
-    else:
-        kb_tip = (
-            f"I see {len(st.session_state.documents)} document(s) in Knowledge Base. "
-            "In the next sprint I'll start quoting clauses with page refs."
+
+    # 1. 组织我们要发给模型的对话
+    # system 提示是它的角色，user 是租户提的问题
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a helpful property management assistant. "
+                "If the user is reporting a maintenance problem (leak, noise, AC broken), "
+                "classify the issue and suggest creating a service ticket. "
+                "If the user is asking about lease terms, answer politely. "
+            ),
+        },
+        {
+            "role": "user",
+            "content": user_text,
+        },
+    ]
+
+    # 2. 调用 gpt-4o-mini
+    try:
+        response = client.responses.create(
+            model="gpt-4o-mini",
+            input=messages,
         )
 
-    # naive intent hint for ticketing demo
-    if any(keyword in user_text.lower() for keyword in ["leak", "broken", "repair", "fix", "电", "水", "噪音"]):
-        action_hint = (
-            "It sounds like a maintenance issue. In the final version I will open a ticket "
-            "in Service Desk automatically."
-        )
-    else:
-        action_hint = ""
+        # 3. 从返回结构里取文本
+        model_answer = response.output[0].content[0].text
 
-    return f"You asked: '{user_text}'. {kb_tip} {action_hint}"
+    except Exception as e:
+        # 如果有错误（例如没绑信用卡 / key无效 / 网断），给个可解释 fallback
+        model_answer = (
+            "I'm having trouble reaching the model right now. "
+            f"(Details: {e})"
+        )
+
+    return model_answer
 
 
 def tab_chat():
@@ -375,7 +409,7 @@ def tab_service():
 def main():
     init_state()
 
-    st.sidebar.title("Tenant Assistant — Sprint 2")
+    st.sidebar.title("Everrent Tenant Assistant")
     st.sidebar.caption(
         "Step 1 skeleton is running. Next we'll add RAG, DB, and auto-ticketing."
     )
