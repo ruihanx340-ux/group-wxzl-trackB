@@ -16,6 +16,7 @@ Later steps:
 from __future__ import annotations
 import os
 import io
+import glob
 import uuid
 from datetime import datetime, date
 from typing import List, Dict, Any
@@ -60,6 +61,49 @@ def _now_str() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+
+
+def preload_demo_documents():
+    """
+    把 data/sample_docs/ 里的 PDF 自动放进 session_state.documents，
+    这样网页一打开就会显示“已有文档”。
+    只在 session_state.documents 还没任何内容的时候做，
+    避免重复添加。
+    """
+    if st.session_state.documents:
+        # 已经有用户上传的内容了，就不重复塞 demo
+        return
+
+    sample_folder = os.path.join("data", "sample_docs")
+    pdf_paths = glob.glob(os.path.join(sample_folder, "*.pdf"))
+
+    for path in pdf_paths:
+        try:
+            with open(path, "rb") as f:
+                raw = f.read()
+        except Exception:
+            continue
+
+        pages = _pdf_page_count(raw)
+        file_name = os.path.basename(path)
+
+        # 这里我们随便给一个默认的元数据
+        # 你可以按需要改，比如 unit_id、doc_type
+        demo_doc = {
+            "id": _gen_id("doc"),
+            "name": file_name,
+            "unit_id": "A-101",                # 你可以硬编码成示例单元
+            "doc_type": "lease" if "lease" in file_name.lower() else "house_rules",
+            "effective_from": date.today().isoformat(),
+            "pages": pages,
+            "size_kb": round(len(raw) / 1024, 1),
+            "uploaded_at": _now_str(),
+            "raw_bytes": raw,
+        }
+
+        st.session_state.documents.append(demo_doc)
+
+
 def _gen_id(prefix: str) -> str:
     import uuid as _uuid
     return f"{prefix}_{_uuid.uuid4().hex[:8]}"
@@ -101,7 +145,7 @@ def init_state():
         #   {id, tenant_name, unit_id, category, priority,
         #    status, scheduled_at, created_at, notes}
         st.session_state.tickets: List[Dict[str, Any]] = []
-
+    preload_demo_documents()
 # --------------------------
 # Chat tab (placeholder bot)
 # --------------------------

@@ -24,4 +24,4 @@ secrets.toml
 
 # Uploads / large files
 *.pdf
-!.*/sample_docs/*.pdf
+!data/sample_docs/*.pdf
