@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import uuid
 import datetime as dt
+from pathlib import Path
 from typing import List, Dict, Any
 
 import streamlit as st
@@ -23,7 +24,7 @@ from src.service.autoschema import AUTO_TICKET_TOOL, high_confidence
 try:
     from openai import OpenAI
 except Exception:
-    OpenAI = None  # 让应用能在未安装 openai 时仍然打开其它页面
+    OpenAI = None  # 让应用在未安装 openai 时也能打开其它页面
 
 # ========= bootstrap =========
 load_dotenv()  # 读取本地 .env（OPENAI_API_KEY / OPENAI_BASE_URL / CHAT_MODEL / EMBED_MODEL）
@@ -31,62 +32,72 @@ load_dotenv()  # 读取本地 .env（OPENAI_API_KEY / OPENAI_BASE_URL / CHAT_MOD
 st.set_page_config(page_title="Track B · RAG + Service Desk", layout="wide")
 
 @st.cache_resource(show_spinner=False)
-# --- seed: index sample PDFs on first run (supports multiple dirs) ---
-def seed_docs_if_empty(conn, unit_id_default: str = "A-101"):
-    # 已有文档则跳过
-    try:
-        rows = query(conn, "SELECT COUNT(*) AS n FROM documents")
-        if rows and rows[0]["n"] > 0:
-            return
-    except Exception:
-        pass
-
-    # 支持三种来源：环境变量 SEED_DIR、仓库 sample_docs/、本地 data/sample_docs/
-    import os, uuid, datetime as dt
-    from pathlib import Path
-
-    cand = []
-    if os.getenv("SEED_DIR"):
-        cand.append(Path(os.getenv("SEED_DIR")))
-    cand.append(Path("sample_docs"))
-    cand.append(Path("data") / "sample_docs")
-
-    picked = None
-    for p in cand:
-        if p and p.is_dir() and any(x.suffix.lower()==".pdf" for x in p.iterdir()):
-            picked = p
-            break
-    if not picked:
-        return  # 没有可用的种子目录
-
-    for pdf in picked.glob("*.pdf"):
-        try:
-            raw = pdf.read_bytes()
-            doc_id = f"seed_{uuid.uuid4().hex[:8]}"
-            execute(
-                conn,
-                """
-                INSERT INTO documents(id, name, unit_id, doc_type, version, effective_from, pages, size_kb, uploaded_at)
-                VALUES (?, ?, ?, 'lease', 1, ?, 0, ?, ?)
-                """,
-                (
-                    doc_id, pdf.name, unit_id_default,
-                    dt.datetime.utcnow().isoformat(timespec="seconds"),
-                    round(len(raw)/1024, 1),
-                    dt.datetime.utcnow().isoformat(timespec="seconds"),
-                ),
-            )
-            chunks = pdf_to_chunks(doc_id, pdf.name, unit_id_default, raw)
-            add_chunks(chunks)
-            st.toast(f"Seeded: {pdf.name} (chunks: {len(chunks)})")
-        except Exception as e:
-            st.warning(f"Seed index failed for {pdf.name}: {e}")
-
 def _init_and_connect():
     init_db()
     return get_conn()
 
 conn = _init_and_connect()
+
+# ---------------------------------------------------------------------
+# 📦 Seed helpers：首启自动从仓库/本地目录导入 PDF
+# ---------------------------------------------------------------------
+def _seed_from_folders(conn, folders: List[str | os.PathLike], unit_id_default: str = "A-101") -> int:
+    """
+    从候选目录导入 *.pdf；同名已存在则跳过。返回导入数量。
+    支持目录：SEED_DIR（环境变量）、sample_docs/、data/sample_docs/
+    """
+    count = 0
+    for folder in folders:
+        if not folder:
+            continue
+        p = Path(folder)
+        if not p.is_dir():
+            continue
+        for pdf in p.glob("*.pdf"):
+            try:
+                # 重复保护：同名已存在则跳过
+                dup = query(conn, "SELECT id FROM documents WHERE name=? LIMIT 1", (pdf.name,))
+                if dup:
+                    continue
+                raw = pdf.read_bytes()
+                doc_id = f"seed_{uuid.uuid4().hex[:8]}"
+                execute(
+                    conn,
+                    """
+                    INSERT INTO documents(id, name, unit_id, doc_type, version, effective_from, pages, size_kb, uploaded_at)
+                    VALUES (?, ?, ?, 'lease', 1, ?, 0, ?, ?)
+                    """,
+                    (
+                        doc_id,
+                        pdf.name,
+                        unit_id_default,
+                        dt.datetime.utcnow().isoformat(timespec="seconds"),
+                        round(len(raw) / 1024, 1),
+                        dt.datetime.utcnow().isoformat(timespec="seconds"),
+                    ),
+                )
+                chunks = pdf_to_chunks(doc_id, pdf.name, unit_id_default, raw)
+                add_chunks(chunks)
+                count += 1
+            except Exception as e:
+                st.warning(f"Seed index failed for {pdf.name}: {e}")
+    return count
+
+def seed_docs_if_empty(conn, unit_id_default: str = "A-101"):
+    """库空时自动导入；不空则跳过。"""
+    try:
+        n = query(conn, "SELECT COUNT(*) AS n FROM documents")[0]["n"]
+    except Exception:
+        n = 0
+    if n > 0 and os.getenv("SEED_ALWAYS") != "yes":
+        return
+    folders = [os.getenv("SEED_DIR"), "sample_docs", os.path.join("data", "sample_docs")]
+    added = _seed_from_folders(conn, folders, unit_id_default)
+    if added:
+        st.toast(f"Seeded {added} document(s).")
+
+# 先尝试种子导入（默认用 A-101；稍后侧边栏可改 Active Unit）
+seed_docs_if_empty(conn, "A-101")
 
 # ========= sidebar =========
 st.sidebar.title("Settings")
@@ -111,7 +122,7 @@ model_chat = st.sidebar.text_input("Chat model", value=os.getenv("CHAT_MODEL", "
 model_embed = st.sidebar.text_input("Embedding model", value=os.getenv("EMBED_MODEL", "text-embedding-3-small"))
 
 if not api_key:
-    st.sidebar.error("OPENAI_API_KEY 未配置（.env 或 Secrets）。聊天、嵌入与工单抽取将不可用。")
+    st.sidebar.warning("OPENAI_API_KEY 未配置（.env 或 Secrets）。聊天、嵌入与工单抽取将不可用。")
 
 # ========= tabs =========
 tab_chat, tab_kb, tab_desk = st.tabs(["💬 Chat", "📚 Knowledge Base", "🛠 Service Desk"])
@@ -221,7 +232,7 @@ with tab_chat:
                         create_now = True
 
                 if create_now:
-                    # NOTE: 不再传 status 参数；建单后显式置为 open（确保可见）
+                    # NOTE: 不传 status；建单后显式置为 open（确保可见）
                     tid = create_ticket(
                         conn,
                         unit_id=draft.get("unit_id", default_unit),
@@ -258,11 +269,11 @@ with tab_chat:
                         raise RuntimeError("OpenAI key/base_url missing")
                     client = OpenAI(api_key=api_key, base_url=base_url, timeout=30.0)
                     answer_text = answer_with_citations(
-                        client=client,
-                        model=model_chat,
                         question=prompt,
                         hits=hits,
                         unit_id=default_unit,
+                        client=client,
+                        model=model_chat,
                     )
                 except Exception as e:
                     answer_text = f"RAG failed: {e}\n\nI can still chat without citations if you disable RAG."
@@ -337,6 +348,16 @@ with tab_kb:
                     s.update(label="Indexed metadata only (vector error or extract fail)", state="error", expanded=True)
                     st.warning(f"Index error: {e}")
 
+    # 手动一键导入（即使库不空也可）
+    if st.button("Seed sample docs now"):
+        folders = [os.getenv("SEED_DIR"), "sample_docs", os.path.join("data", "sample_docs")]
+        added = _seed_from_folders(conn, folders, default_unit)
+        if added:
+            st.success(f"Imported {added} document(s).")
+            st.rerun()
+        else:
+            st.info("No PDFs found under sample_docs/ (or already imported).")
+
     # 文档清单
     rows = query(
         conn,
@@ -346,7 +367,7 @@ with tab_kb:
     if rows:
         st.dataframe(rows, use_container_width=True, hide_index=True)
     else:
-        st.info("No documents yet. Upload a PDF to build your knowledge base.")
+        st.info("No documents yet. Upload or Seed to build your knowledge base.")
 
     st.markdown("### Quick test (vector search only)")
     q = st.text_input("Search phrase (filtered by Active Unit):", "", label_visibility="collapsed")
@@ -403,3 +424,4 @@ with tab_desk:
                         st.rerun()
                 with cols[4]:
                     st.caption(f"Created at: {r['created_at']}  |  Access window: {r.get('access_window','')}")
+
