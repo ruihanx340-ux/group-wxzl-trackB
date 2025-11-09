@@ -1,27 +1,19 @@
-# Python cache / venv
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-.env
+# venv & IDE
 .venv/
-venv/
-ENV/
-.env.*
-
-# Streamlit secrets (local only)
-.streamlit/
-secrets.toml
-
-# OS / editor junk
-.DS_Store
-.idea/
 .vscode/
+__pycache__/
 
-# Local data / DB
-/data/seed.db
-*.db
+# local configs & secrets
+.env
+.streamlit/secrets.toml
 
-# Uploads / large files
+# local data
+data/sqlite/app.db
+data/chroma/
+data/sample_docs/
 *.pdf
-!data/sample_docs/*.pdf
+*.docx
+
+# OS
+Thumbs.db
+.DS_Store

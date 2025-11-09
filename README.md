@@ -1,32 +1,24 @@
-# Tenant Support Assistant (Track B)
+# Tenant Support Assistant — Sprint 3
 
-A small assistant for tenants and property managers. The goal is to centralize common actions such as "inquiring about contract terms / reporting maintenance issues / following up on processing progress" in a simple web page. 
-The project is currently a prototype based on Streamlit and is already available for online access and demonstration (not a screenshot-based demo, but one that can be interacted with). 
----
-
-The problem we want to solve 
-The process in reality is usually like this: 
-Tenants keep asking repetitive questions such as "When is the rent due?", "Can I keep a pet?" and "How do I report a leak?".
-The property manager has to rummage through the contract, management regulations and chat records everywhere before replying one by one.
-Repair requests end up scattered across WhatsApp, WeChat, phone calls and notes on paper. 
-What we hope to achieve is: 
-1. Tenants can directly ask questions on the webpage (similar to a customer service chat box).
-2. The chat assistant can answer based on existing contracts/management regulations or identify "This is a repair issue".
-3. Repair issues can be automatically transformed into work orders, recorded, prioritized, and their status tracked. 
-This is the core objective of Track B (landlord/property management assistant). 
----
-
-## 2. Completed Features (Sprint 2 Status) 
-The current online version already has these practical and functional features: 
-### 2.1 Chat (Chat Assistant) 
-Users can input natural language questions, such as: 
-* “When is the rent due for unit A-101?”
-* “There is water leaking under my kitchen sink.”
-The system will generate responses using a large model (via the OpenAI API). If the question is related to maintenance, such as water leakage, air conditioner malfunction, or noise disturbance, the assistant will categorize the content as a maintenance request and prompt the creation of a work order. For questions regarding contracts or regulations, the assistant will attempt to provide explanatory answers. 
-Note: Currently, the model directly answers the questions. It has not yet been able to quote the exact page and article number from the contract. This feature will be added in the next stage of the RAG process. 
-### 2.2 Knowledge Base (Contract Document Library) 
-* You can upload PDFs, such as leases, house rules, building policies, etc.
-* Each document will record: 
-* Corresponding unit_id (e.g. A-101)
-* Document type (lease / house_rules / other)
-* Effective
+## Abstract
+This project has implemented a prototype system for the tenant-property management scenario. The goal of Sprint 3 is to complete **retrieval-augmented generation (RAG) with references**, **automatic work order creation for repair intentions**, and **SQLite persistence** on the basis of the existing conversational interaction, and to provide a minimal dashboard for classroom demonstrations and subsequent evaluation expansion. 
+## System Overview
+- **Frontend and Orchestration**: Streamlit.
+- **Large Model Service**: OpenAI API (dialogue uses `gpt-4o-mini`, embedding uses `text-embedding-3-small`).
+- **Persistence**: SQLite stores document metadata and work orders; Chroma stores text vector indexes.
+- **Function Tabs**:
+- **Chat**: Supports toggling "Enable References (RAG)"; when enabled, answers are limited to retrieved fragments and include `[File p.Page Number]` references.
+- **Knowledge Base**: Upload and manage PDFs; upload triggers extraction, chunking, embedding, and indexing.
+- **Service Desk**: Create and manage maintenance work orders, providing a status flow of Open → In Progress → Closed.
+- **Metrics**: Displays the number of documents and work orders (future expansion may include accuracy, latency, and cost evaluations).
+- **Search Scope**: Limits search scope by `unit_id` (e.g., `A-101`); can be switched in the sidebar. 
+## Sprint 3 Feature Scope
+1. **RAG (with References)**: Responses are strictly based on retrieved fragments; when no match is found, clearly state "Unable to answer/Please supplement the document". The reference format is `[File p.Page Number]`.
+2. **Automatic Work Orders**: For repair-related conversations, function-based tools are used to generate work order drafts; high-confidence orders are created automatically, while low-confidence ones require confirmation before creation.
+3. **Persistence**: Core data such as `documents` and `tickets` are stored in SQLite; vector indexes are persisted in Chroma.
+4. **Preloading Sample Documents**: PDFs in `data/sample_docs/` are automatically imported and indexed at startup to ensure there is available base data for demonstrations. 
+## Data Flow
+1. **Document Ingestion**: Upload documents to the knowledge base or place them in `data/sample_docs/`; the system records metadata such as name, size, number of pages, and timestamp.
+2. **Chunking and Embedding**: After extracting text from PDFs, it is chunked into approximately 800–1200 characters with 120–200 character overlap; embeddings are generated and written to Chroma, while retaining metadata such as `doc_id/file/unit_id/page/chunk_index`.
+3. **Retrieval and Response**: During queries, vector search results are filtered by `unit_id`; responses strictly use the retrieval context and include citations.
+4. **Automatic Work Order**: When maintenance intent is detected in the conversation, a JSON-structured draft is generated by function call; if the threshold is met, a work order is created directly; otherwise, the user is asked to confirm. 
