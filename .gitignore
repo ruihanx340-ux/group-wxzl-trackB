@@ -7,12 +7,6 @@ __pycache__/
 .env
 .streamlit/secrets.toml
 
-# local data
-data/sqlite/app.db
-data/chroma/
-data/sample_docs/
-*.pdf
-*.docx
 
 # OS
 Thumbs.db
