@@ -31,6 +31,57 @@ load_dotenv()  # 读取本地 .env（OPENAI_API_KEY / OPENAI_BASE_URL / CHAT_MOD
 st.set_page_config(page_title="Track B · RAG + Service Desk", layout="wide")
 
 @st.cache_resource(show_spinner=False)
+# --- seed: index sample PDFs on first run (supports multiple dirs) ---
+def seed_docs_if_empty(conn, unit_id_default: str = "A-101"):
+    # 已有文档则跳过
+    try:
+        rows = query(conn, "SELECT COUNT(*) AS n FROM documents")
+        if rows and rows[0]["n"] > 0:
+            return
+    except Exception:
+        pass
+
+    # 支持三种来源：环境变量 SEED_DIR、仓库 sample_docs/、本地 data/sample_docs/
+    import os, uuid, datetime as dt
+    from pathlib import Path
+
+    cand = []
+    if os.getenv("SEED_DIR"):
+        cand.append(Path(os.getenv("SEED_DIR")))
+    cand.append(Path("sample_docs"))
+    cand.append(Path("data") / "sample_docs")
+
+    picked = None
+    for p in cand:
+        if p and p.is_dir() and any(x.suffix.lower()==".pdf" for x in p.iterdir()):
+            picked = p
+            break
+    if not picked:
+        return  # 没有可用的种子目录
+
+    for pdf in picked.glob("*.pdf"):
+        try:
+            raw = pdf.read_bytes()
+            doc_id = f"seed_{uuid.uuid4().hex[:8]}"
+            execute(
+                conn,
+                """
+                INSERT INTO documents(id, name, unit_id, doc_type, version, effective_from, pages, size_kb, uploaded_at)
+                VALUES (?, ?, ?, 'lease', 1, ?, 0, ?, ?)
+                """,
+                (
+                    doc_id, pdf.name, unit_id_default,
+                    dt.datetime.utcnow().isoformat(timespec="seconds"),
+                    round(len(raw)/1024, 1),
+                    dt.datetime.utcnow().isoformat(timespec="seconds"),
+                ),
+            )
+            chunks = pdf_to_chunks(doc_id, pdf.name, unit_id_default, raw)
+            add_chunks(chunks)
+            st.toast(f"Seeded: {pdf.name} (chunks: {len(chunks)})")
+        except Exception as e:
+            st.warning(f"Seed index failed for {pdf.name}: {e}")
+
 def _init_and_connect():
     init_db()
     return get_conn()
